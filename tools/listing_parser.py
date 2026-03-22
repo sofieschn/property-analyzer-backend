@@ -51,6 +51,41 @@ class PropertyData(BaseModel):
     floor: Optional[str] = Field(None, description="Floor number")
     debt_per_sqm: Optional[int] = Field(None, description="BRF debt per m2 in SEK")
     maintenance_fund_per_sqm: Optional[int] = Field(None, description="Maintenance fund per m2 in SEK")
+    image_url: Optional[str] = Field(None, description="Main property image URL")
+
+
+def _extract_image_url(html: str) -> Optional[str]:
+    """Extract the main property image from og:image, twitter:image, or JSON-LD."""
+    soup = BeautifulSoup(html, "html.parser")
+
+    # og:image is the most reliable — all major Swedish listing sites set it
+    og = soup.find("meta", property="og:image")
+    if og and og.get("content"):
+        return og["content"]
+
+    twitter = soup.find("meta", attrs={"name": "twitter:image"})
+    if twitter and twitter.get("content"):
+        return twitter["content"]
+
+    # Fallback: look in JSON-LD for an "image" field
+    for script in soup.find_all("script", type="application/ld+json"):
+        try:
+            data = json.loads(script.string)
+            items = [data] if isinstance(data, dict) else data if isinstance(data, list) else []
+            for item in items:
+                if not isinstance(item, dict):
+                    continue
+                img = item.get("image")
+                if isinstance(img, str) and img.startswith("http"):
+                    return img
+                if isinstance(img, dict) and img.get("url", "").startswith("http"):
+                    return img["url"]
+                if isinstance(img, list) and img and isinstance(img[0], str):
+                    return img[0]
+        except (json.JSONDecodeError, TypeError):
+            continue
+
+    return None
 
 
 def _extract_json_ld(html: str) -> Optional[dict]:
@@ -195,7 +230,10 @@ async def parse_listing(url: str) -> dict:
             all_context["fetch_error"] = str(e)
 
         # Step 2: Extract structured data from HTML
+        image_url = None
         if html:
+            image_url = _extract_image_url(html)
+
             json_ld = _extract_json_ld(html)
             if json_ld:
                 all_context["json_ld"] = json.dumps(json_ld, ensure_ascii=False)[:2000]
@@ -280,6 +318,9 @@ Gathered data:
         data = json.loads(result.content.strip().strip("```json").strip("```"))
     except json.JSONDecodeError:
         data = {}
+
+    if image_url:
+        data["image_url"] = image_url
 
     non_null = sum(1 for v in data.values() if v is not None)
     if non_null < 3:
