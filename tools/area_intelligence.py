@@ -28,34 +28,33 @@ def _clean_address_for_geocoding(address: str) -> str:
 
 
 async def _geocode_address(address: str) -> Optional[tuple]:
-    """Convert a Swedish address to lat/lng using Nominatim."""
+    """Convert a Swedish address to lat/lng using Nominatim.
+    Tries multiple search strategies to handle addresses across all of Sweden."""
     cleaned = _clean_address_for_geocoding(address)
+
+    # Build list of queries to try, from most specific to least
+    queries = [
+        f"{cleaned}, Sweden",              # Full address, let Nominatim find the city
+        f"{cleaned}, Stockholm, Sweden",    # Explicit Stockholm fallback
+        f"{cleaned}, Göteborg, Sweden",     # Gothenburg fallback
+        f"{cleaned}, Malmö, Sweden",        # Malmö fallback
+    ]
+
+    # Also try just street + number without letter suffix (e.g. "4B" -> "4")
+    street_only = re.match(r'^([\w\säöåÄÖÅ]+\s+\d+)', cleaned)
+    if street_only:
+        queries.insert(1, f"{street_only.group(1)}, Sweden")
 
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(
-                "https://nominatim.openstreetmap.org/search",
-                params={
-                    "q": f"{cleaned}, Stockholm, Sweden",
-                    "format": "json",
-                    "limit": 1,
-                },
-                headers={"User-Agent": "PropertyAnalyzer/1.0 (hackathon project)"},
-            )
-            if response.status_code == 200:
-                data = response.json()
-                if data:
-                    return float(data[0]["lat"]), float(data[0]["lon"])
-
-            # Fallback: try with just the street name and number
-            street_only = re.match(r'^[\w\s]+\s+\d+', cleaned)
-            if street_only:
+            for query in queries:
                 response = await client.get(
                     "https://nominatim.openstreetmap.org/search",
                     params={
-                        "q": f"{street_only.group()}, Stockholm, Sweden",
+                        "q": query,
                         "format": "json",
                         "limit": 1,
+                        "countrycodes": "se",
                     },
                     headers={"User-Agent": "PropertyAnalyzer/1.0 (hackathon project)"},
                 )
