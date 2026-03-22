@@ -254,17 +254,21 @@ async def parse_listing(url: str) -> dict:
         if url_hints:
             all_context["url_hints"] = json.dumps(url_hints, ensure_ascii=False)
 
-        # Step 4: Find and extract PDF documents
+        # Step 4: Find and extract PDF documents IN PARALLEL
         if html:
             pdf_urls = _find_pdf_links(html, url)
-            pdf_texts = []
-            for pdf_url in pdf_urls:
-                pdf_text = await _extract_pdf_text(pdf_url, client)
-                if pdf_text:
-                    pdf_texts.append({
-                        "source": pdf_url,
-                        "text": pdf_text,
-                    })
+            if pdf_urls:
+                import asyncio
+                pdf_results = await asyncio.gather(
+                    *[_extract_pdf_text(pdf_url, client) for pdf_url in pdf_urls]
+                )
+                pdf_texts = [
+                    {"source": pdf_url, "text": text}
+                    for pdf_url, text in zip(pdf_urls, pdf_results)
+                    if text
+                ]
+            else:
+                pdf_texts = []
 
             if pdf_texts:
                 # Combine PDF texts, limit total size

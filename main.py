@@ -99,11 +99,13 @@ async def analyze(request: AnalyzeRequest):
 
             # Generate summary
             llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.3)
+            area_summary = {k: {"count": v.get("count", 0), "closest": v["items"][0]["name"] if v.get("items") else None}
+                            for k, v in area_result.get("nearby", {}).items()}
             summary_prompt = f"""Based on this analysis, generate a JSON with:
 score (1-10, 10=safest), label (string), summary (2-3 sentences).
 Economy: {json.dumps(economy_result, default=str)}
 Sustainability: {json.dumps(sustainability_result, default=str)}
-Area: {json.dumps(area_result, default=str)}
+Area (nearby counts): {json.dumps(area_summary, default=str)}
 Return ONLY JSON."""
 
             resp = await llm.ainvoke(summary_prompt)

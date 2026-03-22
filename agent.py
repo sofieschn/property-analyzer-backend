@@ -69,6 +69,9 @@ async def run_analysis(url: str) -> dict:
     # Step 3: Generate overall score and summary
     llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.3)
 
+    area_summary = {k: {"count": v.get("count", 0), "closest": v["items"][0]["name"] if v.get("items") else None}
+                     for k, v in area_result.get("nearby", {}).items()}
+
     summary_prompt = f"""Based on this Swedish property analysis, generate:
 1. A risk score from 1-10 (10 = safest, 1 = highest risk)
 2. A risk label: "Safe investment", "Proceed with caution", or "High risk — investigate further"
@@ -78,9 +81,9 @@ Property: {listing_data.get('address')} — {listing_data.get('asking_price')} S
 
 BRF Economy: {json.dumps(economy_result, default=str)}
 Sustainability: {json.dumps(sustainability_result, default=str)}
-Area: {json.dumps(area_result, default=str)}
+Area (nearby counts): {json.dumps(area_summary, default=str)}
 
-Return JSON with fields: score (int), label (string), summary (string)"""
+Return ONLY JSON with fields: score (int), label (string), summary (string)"""
 
     summary_response = await llm.ainvoke(summary_prompt)
     try:

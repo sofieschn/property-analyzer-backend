@@ -81,7 +81,7 @@ async def _try_boverket_search(address: str) -> Optional[dict]:
         # Clean address for search
         clean_addr = re.sub(r',?\s*\d+\s*(av\s*\d+\s*)?tr\b', '', address, flags=re.IGNORECASE).strip()
 
-        async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
+        async with httpx.AsyncClient(timeout=3.0, follow_redirects=True) as client:
             # Try the public search endpoint
             response = await client.get(
                 "https://sokenergideklaration.boverket.se/api/search",
@@ -102,7 +102,7 @@ async def _try_boverket_search(address: str) -> Optional[dict]:
 
     # Fallback: try the older API endpoint
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
+        async with httpx.AsyncClient(timeout=3.0) as client:
             response = await client.get(
                 "https://api.boverket.se/energideklarationer/",
                 params={"kommun": "Stockholm", "adress": address},
