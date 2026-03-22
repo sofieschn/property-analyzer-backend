@@ -44,21 +44,21 @@ async def analyze_brf_economy(
         if risk_level == "LOW":
             risk_level = "MEDIUM"
     elif debt_per_sqm > 10000:
-            risks.append({
-                "flag": "HIGH_DEBT",
-                "message": f"BRF debt is {debt_per_sqm} SEK/m², well above the 10,000 SEK/m² warning threshold. "
-                           "This indicates the association carries significant loans that may lead to fee increases.",
-                "severity": "high"
-            })
-            risk_level = "HIGH"
-        elif debt_per_sqm > 7000:
-            risks.append({
-                "flag": "ELEVATED_DEBT",
-                "message": f"BRF debt at {debt_per_sqm} SEK/m² is moderately high. Monitor for potential fee increases.",
-                "severity": "medium"
-            })
-            if risk_level == "LOW":
-                risk_level = "MEDIUM"
+        risks.append({
+            "flag": "HIGH_DEBT",
+            "message": f"BRF debt is {debt_per_sqm} SEK/m², well above the 10,000 SEK/m² warning threshold. "
+                       "This indicates the association carries significant loans that may lead to fee increases.",
+            "severity": "high"
+        })
+        risk_level = "HIGH"
+    elif debt_per_sqm > 7000:
+        risks.append({
+            "flag": "ELEVATED_DEBT",
+            "message": f"BRF debt at {debt_per_sqm} SEK/m² is moderately high. Monitor for potential fee increases.",
+            "severity": "medium"
+        })
+        if risk_level == "LOW":
+            risk_level = "MEDIUM"
 
     # Maintenance fund assessment
     if maintenance_fund_per_sqm is None:
