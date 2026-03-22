@@ -52,8 +52,6 @@ class PropertyData(BaseModel):
     debt_per_sqm: Optional[int] = Field(None, description="BRF debt per m2 in SEK")
     maintenance_fund_per_sqm: Optional[int] = Field(None, description="Maintenance fund per m2 in SEK")
     image_url: Optional[str] = Field(None, description="Main property image URL")
-    stambyte_done_year: Optional[int] = Field(None, description="Year a stambyte was completed, if mentioned")
-    stambyte_planned_year: Optional[int] = Field(None, description="Year a stambyte is planned, if mentioned")
 
 
 def _extract_image_url(html: str) -> Optional[str]:
@@ -308,8 +306,6 @@ Fields:
 - floor: floor as string (e.g. "5 tr")
 - debt_per_sqm: BRF debt per m2 in SEK — null if not explicitly stated in source
 - maintenance_fund_per_sqm: maintenance fund per m2 in SEK — null if not explicitly stated in source
-- stambyte_done_year: year a stambyte (pipe replacement) was completed, if mentioned (e.g. 2019). Look for "stambyte utfört", "stamrenovering genomförd", "stambyte gjort" etc. null if not mentioned.
-- stambyte_planned_year: year a stambyte is planned, if mentioned (e.g. 2027). Look for "stambyte planerat", "planerad stamrenovering", "kommande stambyte" etc. null if not mentioned.
 
 Return ONLY valid JSON, no markdown or explanation.
 
