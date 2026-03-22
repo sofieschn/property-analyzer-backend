@@ -1,12 +1,12 @@
 """
 Tool 4: Area Intelligence
 Finds nearby amenities, transit, schools, and infrastructure using
-OpenStreetMap Overpass API (single batched query).
+OpenStreetMap Overpass API. Also checks Vindbrukskollen for wind turbines.
 """
 
-import asyncio
 import httpx
 from langchain_core.tools import tool
+from langchain_openai import ChatOpenAI
 from typing import Optional
 import json
 import math
@@ -15,77 +15,68 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+
 OVERPASS_URL = "https://overpass-api.de/api/interpreter"
 
-AMENITY_CATEGORIES = {
+AMENITY_QUERIES = {
     "transit": {
         "label": "Public Transit",
         "tags": [
-            ("node", "railway", "station"),
-            ("node", "railway", "halt"),
-            ("node", "station", "subway"),
-            ("node", "railway", "tram_stop"),
-            ("node", "amenity", "bus_station"),
-            ("node", "highway", "bus_stop"),
+            'node["railway"="station"]',
+            'node["railway"="halt"]',
+            'node["station"="subway"]',
+            'node["railway"="tram_stop"]',
+            'node["amenity"="bus_station"]',
+            'node["highway"="bus_stop"]',
         ],
         "radius": 1500,
     },
     "school": {
         "label": "Schools & Kindergartens",
         "tags": [
-            ("nwr", "amenity", "school"),
-            ("nwr", "amenity", "kindergarten"),
+            'nwr["amenity"="school"]',
+            'nwr["amenity"="kindergarten"]',
         ],
         "radius": 1200,
     },
     "grocery": {
         "label": "Grocery & Shopping",
         "tags": [
-            ("nwr", "shop", "supermarket"),
-            ("nwr", "shop", "convenience"),
+            'nwr["shop"="supermarket"]',
+            'nwr["shop"="convenience"]',
         ],
         "radius": 1000,
     },
     "park": {
         "label": "Parks & Green Spaces",
         "tags": [
-            ("nwr", "leisure", "park"),
-            ("nwr", "leisure", "nature_reserve"),
+            'nwr["leisure"="park"]',
+            'nwr["leisure"="nature_reserve"]',
         ],
         "radius": 1000,
     },
     "healthcare": {
         "label": "Healthcare",
         "tags": [
-            ("nwr", "amenity", "hospital"),
-            ("nwr", "amenity", "clinic"),
-            ("nwr", "amenity", "pharmacy"),
-            ("nwr", "amenity", "doctors"),
+            'nwr["amenity"="hospital"]',
+            'nwr["amenity"="clinic"]',
+            'nwr["amenity"="pharmacy"]',
         ],
         "radius": 1500,
     },
     "restaurant": {
         "label": "Restaurants & Cafés",
         "tags": [
-            ("nwr", "amenity", "restaurant"),
-            ("nwr", "amenity", "cafe"),
+            'nwr["amenity"="restaurant"]',
+            'nwr["amenity"="cafe"]',
         ],
         "radius": 800,
     },
 }
 
-_TYPE_LABELS = {
-    "supermarket": "Supermarket", "convenience": "Convenience store",
-    "park": "Park", "nature_reserve": "Nature reserve",
-    "hospital": "Hospital", "clinic": "Clinic", "pharmacy": "Pharmacy",
-    "doctors": "Doctor's office", "school": "School", "kindergarten": "Kindergarten",
-    "restaurant": "Restaurant", "cafe": "Café",
-    "station": "Station", "halt": "Train stop", "subway": "Subway station",
-    "tram_stop": "Tram stop", "bus_station": "Bus station", "bus_stop": "Bus stop",
-}
-
 
 def _clean_address_for_geocoding(address: str) -> str:
+    """Remove floor info, apartment numbers, and other noise from address."""
     cleaned = re.sub(r',?\s*\d+\s*(av\s*\d+\s*)?tr\b', '', address, flags=re.IGNORECASE)
     cleaned = re.sub(r',?\s*\d+\s*tr\b', '', cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r',?\s*(nb|ög|bv)\b', '', cleaned, flags=re.IGNORECASE)
@@ -95,24 +86,32 @@ def _clean_address_for_geocoding(address: str) -> str:
 
 
 async def _geocode_address(address: str) -> Optional[tuple]:
+    """Convert a Swedish address to lat/lng using Nominatim."""
     cleaned = _clean_address_for_geocoding(address)
+
     queries = [
         f"{cleaned}, Sweden",
         f"{cleaned}, Stockholm, Sweden",
         f"{cleaned}, Göteborg, Sweden",
         f"{cleaned}, Malmö, Sweden",
     ]
+
     street_only = re.match(r'^([\w\säöåÄÖÅ]+\s+\d+)', cleaned)
     if street_only:
         queries.insert(1, f"{street_only.group(1)}, Sweden")
 
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        async with httpx.AsyncClient(timeout=10.0) as client:
             for query in queries:
                 response = await client.get(
                     "https://nominatim.openstreetmap.org/search",
-                    params={"q": query, "format": "json", "limit": 1, "countrycodes": "se"},
-                    headers={"User-Agent": "PropertyAnalyzer/1.0"},
+                    params={
+                        "q": query,
+                        "format": "json",
+                        "limit": 1,
+                        "countrycodes": "se",
+                    },
+                    headers={"User-Agent": "PropertyAnalyzer/1.0 (hackathon project)"},
                 )
                 if response.status_code == 200:
                     data = response.json()
@@ -132,98 +131,71 @@ def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
 
 
 def _element_center(el: dict) -> Optional[tuple]:
+    """Get the lat/lon of an Overpass element (node, way, or relation)."""
     if "lat" in el and "lon" in el:
         return el["lat"], el["lon"]
     center = el.get("center")
     if center:
         return center["lat"], center["lon"]
-    bounds = el.get("bounds")
-    if bounds:
-        return (bounds["minlat"] + bounds["maxlat"]) / 2, (bounds["minlon"] + bounds["maxlon"]) / 2
     return None
 
 
-def _get_display_name(tags: dict) -> str:
-    name = tags.get("name")
-    if name:
-        return name
-    for key in ("shop", "amenity", "leisure", "healthcare", "railway", "highway", "station"):
-        val = tags.get(key)
-        if val and val in _TYPE_LABELS:
-            return _TYPE_LABELS[val]
-    return ""
+async def _query_overpass(lat: float, lon: float, category: str, config: dict, client: httpx.AsyncClient) -> list:
+    """Run an Overpass query for one amenity category and return findings."""
+    radius = config["radius"]
+    tag_union = "".join(f"{tag}(around:{radius},{lat},{lon});" for tag in config["tags"])
+    query = f"[out:json][timeout:10];({tag_union});out center 20;"
 
-
-def _tag_matches_category(tags: dict, category_tags: list) -> bool:
-    for _, key, value in category_tags:
-        if tags.get(key) == value:
-            return True
-    return False
-
-
-def _build_overpass_query(lat: float, lon: float) -> str:
-    """Single Overpass query for all categories — avoids rate limiting."""
-    parts = []
-    for config in AMENITY_CATEGORIES.values():
-        radius = config["radius"]
-        for elem_type, key, value in config["tags"]:
-            parts.append(f'{elem_type}["{key}"="{value}"](around:{radius},{lat},{lon});')
-    return f"[out:json][timeout:20];({' '.join(parts)});out center body 80;"
-
-
-async def _query_all_amenities(lat: float, lon: float) -> dict:
-    """Single batched Overpass request, results sorted into categories."""
-    query = _build_overpass_query(lat, lon)
     try:
-        async with httpx.AsyncClient(timeout=25.0) as client:
-            response = await client.post(OVERPASS_URL, data={"data": query})
-            if response.status_code != 200:
-                logger.warning("Overpass returned %d", response.status_code)
-                return {}
-            elements = response.json().get("elements", [])
-    except Exception as e:
-        logger.warning("Overpass query failed: %s", e)
-        return {}
+        response = await client.post(
+            OVERPASS_URL,
+            data={"data": query},
+            timeout=15.0,
+        )
+        if response.status_code != 200:
+            logger.warning("Overpass returned %d for category '%s'", response.status_code, category)
+            return []
 
-    results = {}
-    for cat_key, config in AMENITY_CATEGORIES.items():
-        cat_items = []
-        seen = set()
+        elements = response.json().get("elements", [])
+        results = []
+        seen_names = set()
+
         for el in elements:
             tags = el.get("tags", {})
-            if not _tag_matches_category(tags, config["tags"]):
+            name = tags.get("name", "")
+            if not name or name in seen_names:
                 continue
-            display_name = _get_display_name(tags)
-            if not display_name:
-                continue
-            dedup = display_name.lower()
-            if dedup in seen:
-                continue
-            seen.add(dedup)
+            seen_names.add(name)
+
             center = _element_center(el)
             dist = _haversine_km(lat, lon, center[0], center[1]) if center else None
-            if dist is not None and dist > config["radius"] / 1000:
-                continue
-            cat_items.append({"name": display_name, "distance_km": round(dist, 2) if dist else None})
 
-        cat_items.sort(key=lambda x: x["distance_km"] if x["distance_km"] is not None else 999)
-        results[cat_key] = {
-            "label": config["label"],
-            "items": cat_items[:5],
-            "count": len(cat_items),
-            "search_radius_m": config["radius"],
-        }
-    return results
+            results.append({
+                "name": name,
+                "distance_km": round(dist, 2) if dist is not None else None,
+            })
+
+        results.sort(key=lambda x: x["distance_km"] if x["distance_km"] is not None else 999)
+        return results[:5]
+
+    except Exception as e:
+        logger.warning("Overpass query failed for '%s': %s", category, e)
+        return []
 
 
 async def _query_wind_turbines(lat: float, lon: float) -> list:
+    """Check Vindbrukskollen for nearby wind power installations."""
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        async with httpx.AsyncClient(timeout=10.0) as client:
             delta = 0.045
             response = await client.get(
                 "https://vbk.lansstyrelsen.se/api/WindPowerPlants",
-                params={"latMin": lat - delta, "latMax": lat + delta,
-                        "lonMin": lon - delta, "lonMax": lon + delta},
+                params={
+                    "latMin": lat - delta,
+                    "latMax": lat + delta,
+                    "lonMin": lon - delta,
+                    "lonMax": lon + delta,
+                },
             )
             if response.status_code == 200:
                 turbines = response.json()
@@ -236,11 +208,12 @@ async def _query_wind_turbines(lat: float, lon: float) -> list:
                         results.append({
                             "name": t.get("name", "Wind turbine"),
                             "status": t.get("status", "unknown"),
+                            "height_m": t.get("totalHeight"),
                             "distance_km": round(dist, 1),
                         })
                 return results
     except Exception as e:
-        logger.warning("Vindbrukskollen failed: %s", e)
+        logger.warning("Vindbrukskollen query failed: %s", e)
     return []
 
 
@@ -251,16 +224,26 @@ async def analyze_area(address: str) -> dict:
 
     coords = await _geocode_address(address)
     if coords is None:
-        return {"error": "Could not geocode address", "nearby": {}, "coordinates": None}
+        return {
+            "error": "Could not geocode address",
+            "nearby": {},
+            "coordinates": None,
+        }
 
     lat, lon = coords
+    nearby = {}
 
-    # Run Overpass + wind turbines in parallel
-    nearby, wind = await asyncio.gather(
-        _query_all_amenities(lat, lon),
-        _query_wind_turbines(lat, lon),
-    )
+    async with httpx.AsyncClient() as client:
+        for category, config in AMENITY_QUERIES.items():
+            items = await _query_overpass(lat, lon, category, config, client)
+            nearby[category] = {
+                "label": config["label"],
+                "items": items,
+                "count": len(items),
+                "search_radius_m": config["radius"],
+            }
 
+    wind = await _query_wind_turbines(lat, lon)
     if wind:
         nearby["wind_power"] = {
             "label": "Wind Power Installations",
@@ -269,7 +252,37 @@ async def analyze_area(address: str) -> dict:
             "search_radius_m": 5000,
         }
 
+    # LLM summary of the neighbourhood
+    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.3)
+    summary_prompt = f"""Based on this nearby-amenities data for a Swedish property at {address},
+write a concise neighbourhood summary (3-5 sentences) highlighting:
+- Transit accessibility
+- Family friendliness (schools, parks)
+- Daily convenience (grocery, healthcare)
+- Any notable positives or negatives
+
+Data:
+{json.dumps(nearby, indent=2, default=str)[:4000]}
+
+Return ONLY a JSON object with:
+- "summary": string (the neighbourhood summary)
+- "walkability_score": int 1-10 (10 = everything within walking distance)
+- "family_score": int 1-10 (10 = ideal for families)
+
+Return ONLY valid JSON."""
+
+    try:
+        result = await llm.ainvoke(summary_prompt)
+        assessment = json.loads(result.content.strip().strip("```json").strip("```"))
+    except Exception:
+        assessment = {
+            "summary": "Area data collected. Review categories for details.",
+            "walkability_score": None,
+            "family_score": None,
+        }
+
     return {
         "coordinates": {"lat": lat, "lon": lon},
         "nearby": nearby,
+        "assessment": assessment,
     }
