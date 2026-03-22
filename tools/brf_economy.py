@@ -33,8 +33,17 @@ async def analyze_brf_economy(
     risk_level = "LOW"
 
     # Debt per m2 assessment
-    if debt_per_sqm is not None:
-        if debt_per_sqm > 10000:
+    if debt_per_sqm is None:
+        risks.append({
+            "flag": "DEBT_DATA_MISSING",
+            "message": "BRF debt per m² could not be found in the listing. "
+                       "Request the BRF annual report (årsredovisning) to verify the association's debt level "
+                       "before making an offer. High debt can lead to significant fee increases.",
+            "severity": "medium"
+        })
+        if risk_level == "LOW":
+            risk_level = "MEDIUM"
+    elif debt_per_sqm > 10000:
             risks.append({
                 "flag": "HIGH_DEBT",
                 "message": f"BRF debt is {debt_per_sqm} SEK/m², well above the 10,000 SEK/m² warning threshold. "
@@ -52,16 +61,25 @@ async def analyze_brf_economy(
                 risk_level = "MEDIUM"
 
     # Maintenance fund assessment
-    if maintenance_fund_per_sqm is not None:
-        if maintenance_fund_per_sqm < 1000:
-            risks.append({
-                "flag": "LOW_FUND",
-                "message": f"Maintenance fund at {maintenance_fund_per_sqm} SEK/m² is below recommended levels. "
-                           "Large repairs may require special assessments or fee increases.",
-                "severity": "medium"
-            })
-            if risk_level == "LOW":
-                risk_level = "MEDIUM"
+    if maintenance_fund_per_sqm is None:
+        risks.append({
+            "flag": "FUND_DATA_MISSING",
+            "message": "Maintenance fund per m² could not be found in the listing. "
+                       "A low or empty maintenance fund means the BRF may struggle to cover future repairs "
+                       "without special assessments (extra uttaxering). Request the årsredovisning to verify.",
+            "severity": "medium"
+        })
+        if risk_level == "LOW":
+            risk_level = "MEDIUM"
+    elif maintenance_fund_per_sqm < 1000:
+        risks.append({
+            "flag": "LOW_FUND",
+            "message": f"Maintenance fund at {maintenance_fund_per_sqm} SEK/m² is below recommended levels. "
+                       "Large repairs may require special assessments or fee increases.",
+            "severity": "medium"
+        })
+        if risk_level == "LOW":
+            risk_level = "MEDIUM"
 
     # Stambyte (pipe replacement) assessment based on building year
     # Pipes last ~50-60 years. Very old buildings (pre-1960) may have already

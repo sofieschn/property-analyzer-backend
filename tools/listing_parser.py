@@ -249,7 +249,15 @@ Look especially in the PDF documents for:
 - Building year (byggår, byggnadsår)
 - BRF name (förening, bostadsrättsförening)
 
-Return a JSON object with these fields (use null if not found):
+Return a JSON object with these fields. Use null if a value is genuinely not found — do NOT use 0 as a default.
+
+CRITICAL: 0 and null mean very different things for a home buyer:
+- null = data not available, buyer should look it up
+- 0 = the BRF has zero debt or zero maintenance fund (very unusual, only use if explicitly stated)
+
+Only return 0 for debt_per_sqm or maintenance_fund_per_sqm if the source text explicitly says "0 kr", "ingen skuld", "skuldfri" or similar. Otherwise return null.
+
+Fields:
 - address: street address including floor (e.g. "Sankt Eriksgatan 83, 5 tr")
 - asking_price: asking price in SEK as integer (e.g. 4295000)
 - size_sqm: living area in m2 as number (e.g. 67)
@@ -258,8 +266,8 @@ Return a JSON object with these fields (use null if not found):
 - brf_name: name of the BRF (e.g. "Brf Majsol")
 - building_year: construction year as integer (e.g. 1968)
 - floor: floor as string (e.g. "5 tr")
-- debt_per_sqm: BRF debt per m2 in SEK as integer if found
-- maintenance_fund_per_sqm: maintenance fund per m2 in SEK as integer if found
+- debt_per_sqm: BRF debt per m2 in SEK — null if not explicitly stated in source
+- maintenance_fund_per_sqm: maintenance fund per m2 in SEK — null if not explicitly stated in source
 
 Return ONLY valid JSON, no markdown or explanation.
 
