@@ -50,6 +50,8 @@ async def run_analysis(url: str) -> dict:
         "building_year": listing_data.get("building_year"),
         "debt_per_sqm": listing_data.get("debt_per_sqm"),
         "maintenance_fund_per_sqm": listing_data.get("maintenance_fund_per_sqm"),
+        "stambyte_done_year": listing_data.get("stambyte_done_year"),
+        "stambyte_planned_year": listing_data.get("stambyte_planned_year"),
     })
 
     sustainability_task = analyze_sustainability.ainvoke({
