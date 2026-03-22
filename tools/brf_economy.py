@@ -6,7 +6,6 @@ Calculates total monthly cost, flags risks like high debt or upcoming stambyte.
 
 from langchain_core.tools import tool
 from typing import Optional
-import math
 
 
 @tool
@@ -22,12 +21,9 @@ async def analyze_brf_economy(
     Calculates total monthly cost and flags economic risks."""
 
     # --- Mortgage calculation ---
-    # Swedish standard: 85% loan-to-value, average rate ~4.2% (2026)
     loan_amount = asking_price * 0.85
     monthly_interest_rate = 0.042 / 12
-    # Swedish mortgages: interest-only is common, but we show full cost
     monthly_mortgage_interest = loan_amount * monthly_interest_rate
-    # Mandatory amortization: 2% if LTV > 70%, 1% if LTV > 50%
     annual_amortization_rate = 0.02
     monthly_amortization = (loan_amount * annual_amortization_rate) / 12
     total_monthly_cost = monthly_fee + monthly_mortgage_interest + monthly_amortization
@@ -41,7 +37,7 @@ async def analyze_brf_economy(
         if debt_per_sqm > 10000:
             risks.append({
                 "flag": "HIGH_DEBT",
-                "message": f"BRF debt is {debt_per_sqm} SEK/m2, well above the 10,000 SEK/m2 warning threshold. "
+                "message": f"BRF debt is {debt_per_sqm} SEK/m², well above the 10,000 SEK/m² warning threshold. "
                            "This indicates the association carries significant loans that may lead to fee increases.",
                 "severity": "high"
             })
@@ -49,7 +45,7 @@ async def analyze_brf_economy(
         elif debt_per_sqm > 7000:
             risks.append({
                 "flag": "ELEVATED_DEBT",
-                "message": f"BRF debt at {debt_per_sqm} SEK/m2 is moderately high. Monitor for potential fee increases.",
+                "message": f"BRF debt at {debt_per_sqm} SEK/m² is moderately high. Monitor for potential fee increases.",
                 "severity": "medium"
             })
             if risk_level == "LOW":
@@ -60,7 +56,7 @@ async def analyze_brf_economy(
         if maintenance_fund_per_sqm < 1000:
             risks.append({
                 "flag": "LOW_FUND",
-                "message": f"Maintenance fund at {maintenance_fund_per_sqm} SEK/m2 is below recommended levels. "
+                "message": f"Maintenance fund at {maintenance_fund_per_sqm} SEK/m² is below recommended levels. "
                            "Large repairs may require special assessments or fee increases.",
                 "severity": "medium"
             })
@@ -68,16 +64,52 @@ async def analyze_brf_economy(
                 risk_level = "MEDIUM"
 
     # Stambyte (pipe replacement) assessment based on building year
+    # Pipes last ~50-60 years. Very old buildings (pre-1960) may have already
+    # had one stambyte but could need another. We flag based on likely cycles.
     stambyte_risk = False
     stambyte_note = None
     if building_year is not None:
         building_age = 2026 - building_year
-        if building_age > 50 and building_age < 70:
+
+        if building_age > 100:
+            # Very old building — likely had one stambyte already.
+            # If built before 1930, first stambyte was probably in 1980-2000.
+            # That means pipes are now 25-45 years old — approaching next cycle.
+            estimated_last_stambyte = building_year + 60  # rough guess
+            years_since_last = 2026 - estimated_last_stambyte
+            if years_since_last > 40:
+                stambyte_risk = True
+                stambyte_note = (
+                    f"Building is from {building_year} ({building_age} years old). "
+                    f"A stambyte was likely performed around {estimated_last_stambyte}, meaning the pipes "
+                    f"are approximately {years_since_last} years old. A second stambyte may be needed within "
+                    "5-10 years. Check the BRF annual report for actual renovation history. "
+                    "Cost: typically 5,000-8,000 SEK/m², often financed through increased monthly fees."
+                )
+                risks.append({
+                    "flag": "STAMBYTE_SECOND_CYCLE",
+                    "message": stambyte_note,
+                    "severity": "high"
+                })
+                risk_level = "HIGH"
+            else:
+                stambyte_note = (
+                    f"Building is from {building_year} ({building_age} years old). "
+                    f"A stambyte was likely performed around {estimated_last_stambyte}. "
+                    "Pipes should be in acceptable condition but verify in the BRF annual report."
+                )
+                risks.append({
+                    "flag": "STAMBYTE_VERIFY",
+                    "message": stambyte_note,
+                    "severity": "low"
+                })
+        elif building_age > 50:
             stambyte_risk = True
             stambyte_note = (
                 f"Building is from {building_year} ({building_age} years old). "
-                "Pipes typically last 50-60 years. A stambyte (pipe replacement) is likely within the next 5 years. "
-                "Cost: typically 5,000-8,000 SEK/m2, often financed through increased monthly fees (+500-1000 SEK/month for 10-15 years)."
+                "Pipes typically last 50-60 years. A stambyte is likely needed soon. "
+                "Cost: typically 5,000-8,000 SEK/m², often financed through increased monthly fees "
+                "(+500-1,000 SEK/month for 10-15 years)."
             )
             risks.append({
                 "flag": "STAMBYTE_LIKELY",
@@ -85,7 +117,7 @@ async def analyze_brf_economy(
                 "severity": "high"
             })
             risk_level = "HIGH"
-        elif building_age >= 40 and building_age <= 50:
+        elif building_age >= 40:
             stambyte_risk = True
             stambyte_note = (
                 f"Building is from {building_year} ({building_age} years old). "
@@ -104,7 +136,7 @@ async def analyze_brf_economy(
     if fee_per_sqm > 80:
         risks.append({
             "flag": "HIGH_FEE",
-            "message": f"Monthly fee is {fee_per_sqm:.0f} SEK/m2, which is above average for Stockholm. "
+            "message": f"Monthly fee is {fee_per_sqm:.0f} SEK/m², which is above average for Stockholm. "
                        "This could indicate the BRF is covering high costs or paying off loans.",
             "severity": "medium"
         })

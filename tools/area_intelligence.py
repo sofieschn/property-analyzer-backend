@@ -10,25 +10,59 @@ from langchain_openai import ChatOpenAI
 from typing import Optional
 import json
 import math
+import re
+
+
+def _clean_address_for_geocoding(address: str) -> str:
+    """Remove floor info, apartment numbers, and other noise from address
+    so geocoding can find the street address."""
+    # Remove common Swedish floor patterns: "1TR", "3 tr", "1 AV 4 TR", "nb", "ög"
+    cleaned = re.sub(r',?\s*\d+\s*(av\s*\d+\s*)?tr\b', '', address, flags=re.IGNORECASE)
+    cleaned = re.sub(r',?\s*\d+\s*tr\b', '', cleaned, flags=re.IGNORECASE)
+    cleaned = re.sub(r',?\s*(nb|ög|bv)\b', '', cleaned, flags=re.IGNORECASE)
+    # Remove apartment/lgh numbers
+    cleaned = re.sub(r',?\s*lgh\s*\d+', '', cleaned, flags=re.IGNORECASE)
+    # Clean up trailing commas and whitespace
+    cleaned = re.sub(r'\s*,\s*$', '', cleaned).strip()
+    return cleaned
 
 
 async def _geocode_address(address: str) -> Optional[tuple]:
-    """Convert a Swedish address to lat/lng using a free geocoding service."""
+    """Convert a Swedish address to lat/lng using Nominatim."""
+    cleaned = _clean_address_for_geocoding(address)
+
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.get(
                 "https://nominatim.openstreetmap.org/search",
                 params={
-                    "q": f"{address}, Stockholm, Sweden",
+                    "q": f"{cleaned}, Stockholm, Sweden",
                     "format": "json",
                     "limit": 1,
                 },
-                headers={"User-Agent": "PropertyAnalyzer/1.0"},
+                headers={"User-Agent": "PropertyAnalyzer/1.0 (hackathon project)"},
             )
             if response.status_code == 200:
                 data = response.json()
                 if data:
                     return float(data[0]["lat"]), float(data[0]["lon"])
+
+            # Fallback: try with just the street name and number
+            street_only = re.match(r'^[\w\s]+\s+\d+', cleaned)
+            if street_only:
+                response = await client.get(
+                    "https://nominatim.openstreetmap.org/search",
+                    params={
+                        "q": f"{street_only.group()}, Stockholm, Sweden",
+                        "format": "json",
+                        "limit": 1,
+                    },
+                    headers={"User-Agent": "PropertyAnalyzer/1.0 (hackathon project)"},
+                )
+                if response.status_code == 200:
+                    data = response.json()
+                    if data:
+                        return float(data[0]["lat"]), float(data[0]["lon"])
     except Exception:
         pass
     return None
@@ -62,7 +96,6 @@ async def analyze_area(address: str) -> dict:
     # --- Vindbrukskollen: wind power installations ---
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
-            # Search within ~5km bounding box
             delta = 0.045  # roughly 5km
             response = await client.get(
                 "https://vbk.lansstyrelsen.se/api/WindPowerPlants",
@@ -75,7 +108,7 @@ async def analyze_area(address: str) -> dict:
             )
             if response.status_code == 200:
                 turbines = response.json()
-                for t in turbines[:5]:  # Limit to 5 nearest
+                for t in turbines[:5]:
                     t_lat = t.get("latitude", t.get("lat"))
                     t_lon = t.get("longitude", t.get("lon"))
                     if t_lat and t_lon:
@@ -99,7 +132,7 @@ async def analyze_area(address: str) -> dict:
                 params={
                     "lat": lat,
                     "lng": lon,
-                    "radius": 1000,  # meters
+                    "radius": 1000,
                     "format": "json",
                 },
             )
